@@ -1,0 +1,3 @@
+
+
+char read(int a);

@@ -1,0 +1,4 @@
+
+
+
+int encode(char v);
