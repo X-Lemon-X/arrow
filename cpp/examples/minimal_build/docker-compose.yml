@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-version: '3.5'
 
 services:
   minimal:
@@ -35,8 +34,9 @@ services:
     volumes:
       - ../../../:/arrow:delegated
       - .:/io:delegated
-    command:
-      - "/io/run_static.sh"
+    # command:
+    #   - "/io/run_static.sh"
+    entrypoint: [ "sleep" , "infinity" ]
 
   static-system-dependency:
     build:

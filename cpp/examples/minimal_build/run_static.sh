@@ -39,10 +39,21 @@ NPROC=$(nproc)
 cmake $ARROW_DIR/cpp \
     -DARROW_BUILD_SHARED=OFF \
     -DARROW_BUILD_STATIC=ON \
-    -DARROW_CSV=ON \
     -DARROW_DEPENDENCY_SOURCE=${ARROW_DEPENDENCY_SOURCE} \
     -DARROW_DEPENDENCY_USE_SHARED=OFF \
     -Dxsimd_SOURCE=BUNDLED \
+    -DARROW_CSV=ON \
+    -DARROW_JEMALLOC=OFF \
+    -DARROW_COMPUTE=ON \
+    -DARROW_ACERO=ON \
+    -DARROW_ORC=ON \
+    -DARROW_DATASET=ON \
+    -DARROW_FILESYSTEM=ON \
+    -DARROW_JSON=ON \
+    -DARROW_ORC=ON \
+    -DPARQUET_BUILD_EXAMPLES=ON \
+    -DARROW_PARQUET=ON \
+    -DPARQUET_BUILD_EXECUTABLES=ON \
     $ARROW_CMAKE_OPTIONS
 
 make -j$NPROC
@@ -51,56 +62,56 @@ make install
 popd
 
 echo
-echo "=="
-echo "== CMake:"
-echo "== Building example project using Arrow C++ library"
-echo "=="
-echo
+# echo "=="
+# echo "== CMake:"
+# echo "== Building example project using Arrow C++ library"
+# echo "=="
+# echo
 
-rm -rf $EXAMPLE_BUILD_DIR
-mkdir -p $EXAMPLE_BUILD_DIR
-pushd $EXAMPLE_BUILD_DIR
+# rm -rf $EXAMPLE_BUILD_DIR
+# mkdir -p $EXAMPLE_BUILD_DIR
+# pushd $EXAMPLE_BUILD_DIR
 
-cmake $EXAMPLE_DIR -DARROW_LINK_SHARED=OFF
-make
+# cmake $EXAMPLE_DIR -DARROW_LINK_SHARED=OFF
+# make
 
-popd
+# popd
 
-echo
-echo "=="
-echo "== CMake:"
-echo "== Running example project"
-echo "=="
-echo
+# echo
+# echo "=="
+# echo "== CMake:"
+# echo "== Running example project"
+# echo "=="
+# echo
 
-pushd $EXAMPLE_DIR
+# pushd $EXAMPLE_DIR
 
-$EXAMPLE_BUILD_DIR/arrow-example
+# $EXAMPLE_BUILD_DIR/arrow-example
 
-echo
-echo "=="
-echo "== pkg-config"
-echo "== Building example project using Arrow C++ library"
-echo "=="
-echo
+# echo
+# echo "=="
+# echo "== pkg-config"
+# echo "== Building example project using Arrow C++ library"
+# echo "=="
+# echo
 
-rm -rf $EXAMPLE_BUILD_DIR
-mkdir -p $EXAMPLE_BUILD_DIR
-${CXX:-c++} -std=c++17 \
-  -o $EXAMPLE_BUILD_DIR/arrow-example \
-  $EXAMPLE_DIR/example.cc \
-  $(PKG_CONFIG_PATH=$ARROW_BUILD_DIR/lib/pkgconfig \
-     pkg-config --cflags --libs --static arrow)
+# rm -rf $EXAMPLE_BUILD_DIR
+# mkdir -p $EXAMPLE_BUILD_DIR
+# ${CXX:-c++} -std=c++17 \
+#   -o $EXAMPLE_BUILD_DIR/arrow-example \
+#   $EXAMPLE_DIR/example.cc \
+#   $(PKG_CONFIG_PATH=$ARROW_BUILD_DIR/lib/pkgconfig \
+#      pkg-config --cflags --libs --static arrow)
 
-popd
+# popd
 
-echo
-echo "=="
-echo "== pkg-config:"
-echo "== Running example project"
-echo "=="
-echo
+# echo
+# echo "=="
+# echo "== pkg-config:"
+# echo "== Running example project"
+# echo "=="
+# echo
 
-pushd $EXAMPLE_DIR
+# pushd $EXAMPLE_DIR
 
-$EXAMPLE_BUILD_DIR/arrow-example
+# $EXAMPLE_BUILD_DIR/arrow-example
