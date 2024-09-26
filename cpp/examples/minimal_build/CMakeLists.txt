@@ -25,7 +25,9 @@ cmake_minimum_required(VERSION 3.16)
 #   endif()
 # endif()
 
-set(CMAKE_GENERATOR "Unix Makefiles")
+# set(CMAKE_GENERATOR "Unix Makefiles")
+# 
+set(CMAKE_GENERATOR "Ninja")
 
 project(ArrowMinimalExample)
 
@@ -45,9 +47,10 @@ add_subdirectory(lib-external)
 
 
 
-if(NOT DEFINED CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 20)
-endif()
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# if(NOT DEFINED CMAKE_CXX_STANDARD)
+# endif()
 
 # We require a C++17 compliant compiler
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,7 +65,11 @@ endif()
 message(STATUS "Arrow version: ${ARROW_VERSION}")
 message(STATUS "Arrow SO version: ${ARROW_FULL_SO_VERSION}")
 
-add_executable(arrow-example example.cxx lib-required/stm.cpp)
+add_executable(arrow-example 
+  example.cxx 
+  lib-required/stm.cpp
+
+) #row_wise_conversion_example.cpp
 # add_executable(arrow-example exec-plan-acero.cpp lib-required/stm.cpp)
 
 

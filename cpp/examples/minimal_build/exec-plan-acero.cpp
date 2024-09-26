@@ -194,6 +194,7 @@ arrow::Result<BatchesWithSchema> MakeBasicBatches() {
 
   out.batches = {b1, b2, b3};
   out.schema = arrow::schema(field_vector);
+
   return out;
 }
 // (Doc section: MakeBasicBatches Definition)
@@ -464,8 +465,8 @@ arrow::Status SourceGroupAggregateSinkExample() {
   ARROW_ASSIGN_OR_RAISE(auto basic_data, MakeBasicBatches());
 
   arrow::AsyncGenerator<std::optional<cp::ExecBatch>> sink_gen;
-
-  auto source_node_options = ac::SourceNodeOptions{basic_data.schema, basic_data.gen()};
+  auto bacis_data_gen = basic_data.gen();
+  auto source_node_options = ac::SourceNodeOptions{basic_data.schema, bacis_data_gen};
 
   ac::Declaration source{"source", std::move(source_node_options)};
   auto options = std::make_shared<cp::CountOptions>(cp::CountOptions::ONLY_VALID);

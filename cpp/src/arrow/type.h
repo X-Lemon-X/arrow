@@ -2254,7 +2254,8 @@ enum class Endianness {
 /// batch or table data structure
 class ARROW_EXPORT Schema : public detail::Fingerprintable,
                             public util::EqualityComparable<Schema>,
-                            public util::ToStringOstreamable<Schema> {
+                            public util::ToStringOstreamable<Schema>,
+                            public std::enable_shared_from_this<Schema> {
  public:
   explicit Schema(FieldVector fields, Endianness endianness,
                   std::shared_ptr<const KeyValueMetadata> metadata = NULLPTR);

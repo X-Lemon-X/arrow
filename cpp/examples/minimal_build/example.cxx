@@ -103,6 +103,215 @@
 #include <type_traits>
 #include <random>
 
+// #include "node_test.hpp"
+
+#include "arrow/acero/exec_plan.h"
+#include "arrow/acero/options.h"
+#include "arrow/acero/util.h"
+#include "arrow/status.h"
+#include "arrow/type.h"
+#include "arrow/util/checked_cast.h"
+#include "arrow/util/macros.h"
+// #include "arrow/util/tracing_internal.h"
+
+// namespace arrow {
+// namespace acero {
+
+class PivotListExtendNodeOptions : public arrow::acero::ExecNodeOptions {
+public:
+  static constexpr std::string_view kName = "pivot_list";
+  std::string list_column_field_name;
+  PivotListExtendNodeOptions(std::string _list_column_field_name): list_column_field_name(_list_column_field_name) {}
+};
+
+class PivotListExtendNode : public arrow::acero::ExecNode, public arrow::acero::TracedNode, public std::enable_shared_from_this<PivotListExtendNode> {
+public:
+  
+  static arrow::Result<std::shared_ptr<arrow::Schema>> MakeOutputSchema(
+    const PivotListExtendNodeOptions& options, 
+    const std::shared_ptr<arrow::Schema> &input_schema_)
+  {
+    // arrow::Result<std::shared_ptr<arrow::Schema>>  = arrow::Result<std::shared_ptr<arrow::Schema>>(input_schema_);    
+    auto fields = input_schema_->fields();
+    std::vector<std::shared_ptr<arrow::Field>> new_fields;
+    for (auto field : fields) {
+      if( field->name() == options.list_column_field_name) {
+        if(field->type()->storage_id() != arrow::Type::LIST) {
+          return arrow::Result<std::shared_ptr<arrow::Schema>>(arrow::Status::KeyError(
+            "PivotListExtendNode: list_column_field_name \"",options.list_column_field_name,"\" must be a pointing to a columnt that is a list: \"",field->type()->ToString(),"\"")
+          ); 
+        }
+        auto new_field = arrow::field(
+          field->name(), 
+          field->type()->field(0)->type(), 
+          field->nullable(),
+          field->metadata()
+          );
+        new_fields.push_back(new_field);
+      } else {
+        new_fields.push_back(field);
+      }
+    }
+    return arrow::Result<std::shared_ptr<arrow::Schema>>(std::make_shared<arrow::Schema>(new_fields));
+  } 
+
+  PivotListExtendNode(
+    arrow::acero::ExecPlan *plan, 
+    std::vector<arrow::acero::ExecNode*> inputs, 
+    arrow::Schema *output_schema,
+    arrow::Schema *input_schema,
+    PivotListExtendNodeOptions options
+  ):
+    arrow::acero::ExecNode(plan, std::move(inputs), {"input"},std::make_shared<arrow::Schema>(*output_schema)),
+    arrow::acero::TracedNode(this),
+    options_(options),
+    output_schema_(std::make_shared<arrow::Schema>(*output_schema) ),
+    input_schema_(std::make_shared<arrow::Schema>(*input_schema) )
+  {
+    for (size_t i = 0; i < output_schema_->field_names().size(); i++){
+      if(output_schema_->field_names()[i] == options.list_column_field_name){
+        index_column_list_ = i;
+        break;
+      }
+    }
+  }
+
+  static arrow::Result<arrow::acero::ExecNode*> Make(
+    arrow::acero::ExecPlan* plan, 
+    std::vector<arrow::acero::ExecNode*> inputs, 
+    const arrow::acero::ExecNodeOptions& options
+    ) 
+  {
+    // RETURN_NOT_OK(arrow::acero::ValidateExecNodeInputs(plan, inputs, 1, "PivotListExtendNode"));
+    const auto& pivot_options = arrow::internal::checked_cast<const PivotListExtendNodeOptions&>(options);
+    // std::shared_ptr<arrow::Schema> output_schema;
+    // ARROW_ASSIGN_OR_RAISE(
+    //     output_schema, 
+    //     PivotListExtendNode::MakeOutputSchema(pivot_options, inputs[0]->output_schema()) 
+    //   );
+    arrow::Schema *output_schema;
+    auto output_schema_res = PivotListExtendNode::MakeOutputSchema(pivot_options, inputs[0]->output_schema());
+    if(!output_schema_res.ok()){
+      return output_schema_res.status();
+    }
+    output_schema = output_schema_res.ValueOrDie().get();
+    auto ret = plan->EmplaceNode<PivotListExtendNode>(
+        plan, 
+        std::move(inputs), 
+        // std::move(output_schema),
+        // std::make_shared<arrow::Schema>(*output_schema),
+        output_schema,
+        inputs[0]->output_schema().get(),
+        std::move(pivot_options)
+      );
+    return ret;
+  }
+
+
+  const char* kind_name() const override {
+    return "PivotListExtendNode"; 
+  }
+
+  arrow::Status StartProducing() override {
+    // Start the producer thread
+    return arrow::Status::OK();
+  }
+
+  arrow::Status StopProducing() override {
+    // Stop the producer thread
+    return arrow::Status::OK();
+  }
+
+  void PauseProducing(arrow::acero::ExecNode* output, int32_t counter) override {
+    inputs_[0]->PauseProducing(this, counter);
+  }
+
+  void ResumeProducing(arrow::acero::ExecNode* output, int32_t counter) override {
+    inputs_[0]->ResumeProducing(this, counter);
+  }
+
+  arrow::ExecBatch ResolveList(const arrow::ExecBatch &input) const{
+    std::vector<std::shared_ptr<arrow::ArrayBuilder>> array_builder;
+    std::vector<std::shared_ptr<arrow::Array>> array;
+    std::vector<arrow::Datum> values (input.values);
+    for (size_t i = 0; i < output_schema_->fields().size(); i++){
+      array_builder.push_back(std::make_shared<arrow::ArrayBuilder>());
+      array.push_back(values[i].make_array());
+    }
+    
+    auto list_column = array[index_column_list_];
+    auto list_list = std::static_pointer_cast<arrow::ListArray>(list_column);
+    auto list_values = list_list->values();
+    auto list_offset = list_list->offset();
+    auto list_length = list_list->length();
+
+    for (int64_t index_array_id = 0; index_array_id < list_length; index_array_id++)
+    {
+      auto begin = list_offset + list_list->value_offset(index_array_id);
+      auto end = list_offset + list_list->value_offset(index_array_id + 1);
+      auto column_array = list_values->Slice(begin, end-begin);
+      for (int64_t exiend_ids = 0; exiend_ids < column_array->length(); exiend_ids++)
+      {
+        auto maybe_column_value = column_array->GetScalar(exiend_ids);
+        if(!maybe_column_value.ok()) throw std::runtime_error("PivotListExtendNode: ResolveList: GetScalar failed");
+        auto column_value = maybe_column_value.ValueOrDie();
+        array_builder[index_column_list_]->AppendScalar(*column_value);
+        
+        for (int64_t i = 0; i < output_schema_->fields().size(); i++){
+          if(i == index_column_list_) continue;
+          auto maybe_value = array[i]->GetScalar(index_array_id);
+          if(!maybe_column_value.ok()) throw std::runtime_error("PivotListExtendNode: ResolveList: GetScalar failed");
+          auto value = maybe_value.ValueOrDie();
+          array_builder[i]->AppendScalar(*value);
+        }
+      }
+      
+    }
+    return input;
+  }
+
+  arrow::Status StopProducingImpl() override { 
+    return arrow::Status::OK(); 
+  }
+
+  arrow::Status InputReceived(arrow::acero::ExecNode* input, arrow::ExecBatch batch) override {
+    // auto scope = TraceInputReceived(batch);
+    DCHECK_EQ(input, inputs_[0]);
+    // for (const auto& row_template : templates_) {
+    //   ExecBatch template_batch = ApplyTemplate(row_template, batch);
+    // }
+    ARROW_RETURN_NOT_OK(output_->InputReceived(this, std::move(batch)));
+    return arrow::Status::OK();
+  }
+
+
+  arrow::Status InputFinished(arrow::acero::ExecNode* input, int total_batches) override {
+    DCHECK_EQ(input, inputs_[0]);
+    // EVENT_ON_CURRENT_SPAN("InputFinished", {{"batches.length", total_batches}});
+    return output_->InputFinished(this, total_batches);
+  }
+
+  protected:
+  std::string ToStringExtra(int indent = 0) const override {
+    std::stringstream ss;
+    ss << "column=[";
+    ss << options_.list_column_field_name;
+    ss << "]";
+    return ss.str();
+  }
+
+private:
+  PivotListExtendNodeOptions options_;
+  std::shared_ptr<arrow::Schema> output_schema_;
+  std::shared_ptr<arrow::Schema> input_schema_;
+  size_t index_column_list_;
+};
+
+void RegisterPivotLongerNode(arrow::acero::ExecFactoryRegistry* registry) {
+  DCHECK_OK(registry->AddFactory(std::string(PivotListExtendNodeOptions::kName),PivotListExtendNode::Make));
+}
+
+
 namespace ds = arrow::dataset;
 namespace fs = arrow::fs;
 namespace cp = arrow::compute;
@@ -136,10 +345,17 @@ struct VectorToArray{
   };
 };
 
+
+
+
+
+
 arrow::Status tables(){
     // tabela 
   ///    nazwa EID id jakes
   ///  nazwa GID kolumna jako skalar lista id
+  
+  // eid_batch
   // EID  GID
   // 1    1,2,3
   // 2    4,5
@@ -149,6 +365,8 @@ arrow::Status tables(){
   // GID id
   // jakeis pole
 
+
+  // gid_batch
   // GID  TOA
   // 1    10
   // 2    20
@@ -156,6 +374,15 @@ arrow::Status tables(){
   // 4    40
   // 5    50
   // 6    60
+
+  // gid_eid_intermidiate_table
+  // GID  EID
+  // 1    1
+  // 2    1
+  // 3    1
+  // 4    2
+  // 5    2
+  // 6    3
 
   // GID  TOA  EID
   // 1    10    1
@@ -168,9 +395,9 @@ arrow::Status tables(){
   std::vector<int> toa_vector = {10,20,30,40,50,60};
 
   std::vector<int> eid_vector = {1,2,3};
-  std::vector<int> gid_1_vector = {1,2,3};
-  std::vector<int> gid_2_vector = {4,5};
-  std::vector<int> gid_3_vector = {6};
+  std::vector<int> gid_1_vector = {11,22,33};
+  std::vector<int> gid_2_vector = {44,55};
+  std::vector<int> gid_3_vector = {66};
 
   std::vector<int> eid_test = {1,2,3};
 
@@ -211,7 +438,7 @@ arrow::Status tables(){
   std::vector<std::shared_ptr<arrow::Field>> eid_table_s = {
     arrow::field("EID",arrow::int32()),
     arrow::field("GID",arrow::list(arrow::int32()))
-    // arrow::field("GID",arrow::int32()),
+    // arrow::field("GID",arrow::int32())
   };
     // arrow::field("EID",arrow::int64()),
   auto eid_table_schema = std::make_shared<arrow::Schema>(eid_table_s);
@@ -224,51 +451,187 @@ arrow::Status tables(){
   std::cout << gid_batch->ToString() << std::endl;
   std::cout << "*********************************************************"<< std::endl;
   std::cout << eid_batch->ToString() << std::endl;
-
-  // Comging tables
-  std::cout << "[JOIN TABLES] *********************************************************"<< std::endl;
-  arrow::dataset::internal::Initialize();
+  // ############################################################################################################
+  // custom node
+  std::cout << "[CUSTOM NODE] *********************************************************"<< std::endl;
   
-  // cp::Expression a_times_b = cp::call("multiply", {cp::field_ref("GID"), cp::field_ref("TOA") });
+  arrow::dataset::internal::Initialize();
+  auto deid  = std::make_shared<arrow::dataset::InMemoryDataset>(eid_batch);
+  auto options  = std::make_shared<arrow::dataset::ScanOptions>();
+  options->projection = cp::project({},{});
+  auto sn_eid = arrow::dataset::ScanNodeOptions{deid, options};
+  
+  // instal node in registry
+  // auto registry = ac::default_exec_factory_registry();
+  auto registry = ac::default_exec_factory_registry();
+  RegisterPivotLongerNode(registry);
+  
+  // auto node_test_options = PivotListExtendNodeOptions("GID");
+  
+  // ac::Declaration scan {"scan", std::move(sn_eid)};
+  // ac::Declaration pivot {"pivot_list", {std::move(scan)}, node_test_options,"pivot-sth-1"};
+  // auto maybe_resp_table_pivot = ac::DeclarationToTable(std::move(pivot));
+  // if(!maybe_resp_table_pivot.ok()){
+  //   std::cout << "Error Declaring table:  " << maybe_resp_table_pivot.status().ToString() << std::endl;
+  //   return arrow::Status::OK();
+  // }
+  // auto response_table_pivot = maybe_resp_table_pivot.ValueOrDie();
+  // std::cout << "Results : " << response_table_pivot->ToString() << std::endl;
+
+  // auto ty = arrow::field("TOA",arrow::int32());
+  // auto ty2 = arrow::field("TOA",arrow::list(arrow::int32()));
+  // auto ty3 = ty2->type()->storage_id();
+  // auto ty35 = ty3 == arrow::Type::LIST;
+
+  // auto ty4 = arrow::int32().get();
+  // auto ty5 = arrow::list(arrow::int32());
+
+  // ############################################################################################################
+  // std::cout << "[TRANSFORM LIST TABLE TO COLUMN PIVOT] *********************************************************"<< std::endl;
+  // arrow::dataset::internal::Initialize();
+
+  // auto deid  = std::make_shared<arrow::dataset::InMemoryDataset>(eid_batch);
+  // auto options  = std::make_shared<arrow::dataset::ScanOptions>();
+  // options->projection = cp::project({},{});
+  // auto sn_eid = arrow::dataset::ScanNodeOptions{deid, options};
+  // arrow::acero::PivotLongerRowTemplate input_template {{"EID"}, {"GID"}};
+  // arrow::acero::PivotLongerRowTemplate out_template {{"EID"}, {"GIDs"}};
+  // auto tem = std::vector<arrow::acero::PivotLongerRowTemplate>{input_template, out_template};
+  // std::vector<std::string> col_names = {"GID"};
+  // std::vector<std::string> value_names = {"GIDs"};
+  // ac::PivotLongerNodeOptions pivot_opts;
+  // pivot_opts.row_templates = tem;
+  // pivot_opts.feature_field_names = col_names;
+  // pivot_opts.measurement_field_names = value_names;
+
+  // ac::Declaration scan {"scan", std::move(sn_eid)};
+  // ac::Declaration pivot {"pivot_longer", {std::move(scan)}, pivot_opts,"pivot-sth-1"};
+
+  // auto maybe_resp_table_pivot = ac::DeclarationToTable(std::move(pivot));
+  // if(!maybe_resp_table_pivot.ok()){
+  //   std::cout << "Error Declaring table:  " << maybe_resp_table_pivot.status().ToString() << std::endl;
+  //   return arrow::Status::OK();
+  // }
+  // auto response_table_pivot = maybe_resp_table_pivot.ValueOrDie();
+  // std::cout << "Results : " << response_table_pivot->ToString() << std::endl;
 
 
-  auto options1  = std::make_shared<arrow::dataset::ScanOptions>();
-  options1->projection = cp::project({},{});
-  auto options2  = std::make_shared<arrow::dataset::ScanOptions>();
-  options2->projection = cp::project({},{});
-
-  auto dataset_gid  = std::make_shared<arrow::dataset::InMemoryDataset>(gid_batch);
-  auto dataset_eid  = std::make_shared<arrow::dataset::InMemoryDataset>(eid_batch);
-  auto scan_node_options_gid = arrow::dataset::ScanNodeOptions{dataset_gid, options1};
-  auto scan_node_options_eid = arrow::dataset::ScanNodeOptions{dataset_eid, options2};
-  auto akgr = arrow::compute::ScalarAggregateOptions();
-
-  arrow::acero::HashJoinNodeOptions join_opts{arrow::acero::JoinType::INNER,
-                                              /*in_left_keys=*/{"GID"},
-                                              /*in_right_keys=*/{"GID"},
-                                              /*filter*/ arrow::compute::literal(true),
-                                              /*output_suffix_for_left*/ "_l",
-                                              /*output_suffix_for_right*/ "_r"};
-
-  cp::Expression is_in = cp::call("is_in", {cp::field_ref("GID"), cp::field_ref("GIDL") });
-
-  ac::Declaration scanG{"scan", std::move(scan_node_options_gid),"scan"};
-  ac::Declaration scanE{"scan", std::move(scan_node_options_eid),"scan"};
-  // ac::Declaration hash{"hashjoin", {std::move(scanG),std::move(scanE)}, join_opts,"project-sth-1"};
-  ac::Declaration hash{"project", {std::move(scanG),std::move(scanE)},,"project-sth-1"};
+  // return arrow::Status::OK();
 
 
-  std::cout << hash.IsValid() << std::endl;
+  // ############################################################################################################
+  std::cout << "[TRANSFORM LIST TABLE TO COLUMN] *********************************************************"<< std::endl;
 
-  auto maybe_resp_table = ac::DeclarationToTable(std::move(hash));
+  // std::vector<int> gidsnew_v;
+  // std::vector<int> eidsnew_v;
+  // auto eid_data = eid_batch->GetColumnByName(std::string("EID"))->chunks();
+  // for (size_t i = 0; i < eid_data.size(); i++)
+  // {
+  //   auto eid_data_chunk = eid_data[i];
+  //   auto gid_data_chunk = eid_batch->GetColumnByName(std::string("GID"))->chunk(i); 
+  //   auto gid_list = std::static_pointer_cast<arrow::ListArray>(gid_data_chunk);
+  //   auto gid_id_values = std::static_pointer_cast<arrow::Int32Array>(gid_list->values());
+  //   auto gid_id_values_ptr = gid_id_values->raw_values();
+  //   for (size_t b = 0; b < gid_data_chunk->length(); b++)
+  //   {
+  //     int32_t eid = std::static_pointer_cast<arrow::Int32Array>(eid_data_chunk)->Value(b);
+  //     const int32_t* first = gid_id_values_ptr + gid_list->value_offset(b);
+  //     const int32_t* last = gid_id_values_ptr + gid_list->value_offset(b + 1);
+  //     std::vector<int> gids(first, last);
+  //     for (auto &&gid_accociated : gids)
+  //     {
+  //       gidsnew_v.push_back(gid_accociated);
+  //       eidsnew_v.push_back(eid);
+  //     }
+  //   }
+  // }
 
-  if(!maybe_resp_table.ok()){
-    std::cout << "Error Declaring table:  " << maybe_resp_table.status().ToString() << std::endl;
-    return arrow::Status::OK();
+  std::vector<int> gidsnew_v;
+  std::vector<int> eidsnew_v;
+  auto eid_data = eid_batch->GetColumnByName(std::string("EID"))->chunks();
+  for (size_t i = 0; i < eid_data.size(); i++)
+  {
+    auto eid_data_chunk = eid_data[i];
+    auto gid_data_chunk = eid_batch->GetColumnByName(std::string("GID"))->chunk(i); 
+    auto gid_list = std::static_pointer_cast<arrow::ListArray>(gid_data_chunk);
+    auto gid_id_values = gid_list->values();
+    auto gid_id_values_offset = gid_list->offset();
+    for (size_t c = 0; c < gid_list->length(); c++)
+    {
+      auto beg =  gid_id_values_offset + gid_list->value_offset(c);
+      auto end = gid_id_values_offset + gid_list->value_offset(c + 1);
+      auto value = gid_id_values->Slice(beg,end-beg);
+
+      for (size_t d = 0; d < value->length(); d++)
+      {
+        std::cout << "sc["<<d<<"]: " << value->GetScalar(d).ValueOrDie()->ToString() << std::endl;  
+
+      }
+    
+      // std::cout << value->ToString()<< std::endl;
+    }
   }
-  auto response_table = maybe_resp_table.ValueOrDie();
-  std::cout << "Results : " << response_table->ToString() << std::endl;
 
+
+  auto gidsnew_array = VectorToArray<decltype(gidsnew_v)::value_type>::vector_to_array(gidsnew_v);
+  auto eidsnew_array = VectorToArray<decltype(eidsnew_v)::value_type>::vector_to_array(eidsnew_v);
+
+  std::vector<std::shared_ptr<arrow::Field>> gidnew_table_s = {
+    arrow::field("GID",arrow::int32()),
+    arrow::field("EID",arrow::int32())
+  };
+
+  auto gidnew_table_schema = std::make_shared<arrow::Schema>(gidnew_table_s);
+  auto gid_eid_intermidiate_table = arrow::Table::Make(gidnew_table_schema,{gidsnew_array,eidsnew_array},gidsnew_array->length());
+  std::cout << gid_eid_intermidiate_table->ToString() << std::endl;
+  
+  // // ############################################################################################################
+  // // hash join  12561
+
+  //   // Comging tables
+  // std::cout << "[JOIN TABLES] *********************************************************"<< std::endl;
+  // arrow::dataset::internal::Initialize();
+  
+  // // cp::Expression a_times_b = cp::call("multiply", {cp::field_ref("GID"), cp::field_ref("TOA") });
+  // auto options1  = std::make_shared<arrow::dataset::ScanOptions>();
+  // options1->projection = cp::project({},{});
+  // auto options2  = std::make_shared<arrow::dataset::ScanOptions>();
+  // options2->projection = cp::project({},{});
+
+  // auto dataset_gid  = std::make_shared<arrow::dataset::InMemoryDataset>(gid_batch);
+  // auto dataset_eid  = std::make_shared<arrow::dataset::InMemoryDataset>(gid_eid_intermidiate_table);
+  // auto scan_node_options_gid = arrow::dataset::ScanNodeOptions{dataset_gid, options1};
+  // auto scan_node_options_eid = arrow::dataset::ScanNodeOptions{dataset_eid, options2};
+  // auto akgr = arrow::compute::ScalarAggregateOptions();
+
+  // arrow::acero::HashJoinNodeOptions join_opts{arrow::acero::JoinType::FULL_OUTER,
+  //                                             /*in_left_keys=*/{"GID"},
+  //                                             /*in_right_keys=*/{"GID"},
+  //                                             /*filter*/ arrow::compute::literal(true),
+  //                                             /*output_suffix_for_left*/ "_l",
+  //                                             /*output_suffix_for_right*/ "_r"};
+
+  // // cp::Expression is_in = cp::call("is_in", {cp::field_ref("GID"), cp::field_ref("GID") });
+
+  // ac::Declaration scanG{"scan", std::move(scan_node_options_gid),"scan"};
+  // ac::Declaration scanE{"scan", std::move(scan_node_options_eid),"scan"};
+  // ac::Declaration hash{"hashjoin", {std::move(scanG),std::move(scanE)}, join_opts,"project-sth-1"};
+  // // ac::Declaration hash{"project", {std::move(scanG),std::move(scanE)},{is_in},"project-sth-1"};
+
+
+  // std::cout << hash.IsValid() << std::endl;
+
+  // auto maybe_resp_table = ac::DeclarationToTable(std::move(hash));
+
+  // if(!maybe_resp_table.ok()){
+  //   std::cout << "Error Declaring table:  " << maybe_resp_table.status().ToString() << std::endl;
+  //   return arrow::Status::OK();
+  // }
+  // auto response_table = maybe_resp_table.ValueOrDie();
+  // std::cout << "Results : " << response_table->ToString() << std::endl;
+
+
+  // trannsform vector to columnt with appropriate ids
   return arrow::Status::OK();
 }
 
